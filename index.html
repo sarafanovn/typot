@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <meta name="theme-color" content="#282828" />
+        <title>typot</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            :root {
+                --bg: #282828;
+                --fg: #ebdbb2;
+                --dim: #665c54;
+                --accent: #b8bb26;
+                --err: #fb4934;
+            }
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+            html,
+            body {
+                height: 100%;
+            }
+            body {
+                background: var(--bg);
+                color: var(--fg);
+                font-family: "JetBrains Mono", monospace;
+                font-size: 20px;
+                line-height: 1.6;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                -webkit-font-smoothing: antialiased;
+            }
+            .wrap {
+                width: min(720px, 92vw);
+            }
+            #paste {
+                width: 100%;
+                min-height: 40vh;
+                background: transparent;
+                border: 1px solid var(--dim);
+                color: var(--fg);
+                font: inherit;
+                padding: 16px;
+                resize: vertical;
+                outline: none;
+            }
+            #paste:focus {
+                border-color: var(--fg);
+            }
+            .hint {
+                color: var(--dim);
+                font-size: 14px;
+                margin-top: 10px;
+            }
+            #area {
+                position: relative;
+                white-space: pre-wrap;
+                overflow-wrap: break-word;
+                word-break: normal;
+            }
+            .char {
+                color: var(--dim);
+            }
+            .char.done {
+                color: var(--fg);
+            }
+            .char.err {
+                color: var(--err);
+            }
+            .caret {
+                position: absolute;
+                width: 2px;
+                height: 1.2em;
+                background: var(--accent);
+                transition:
+                    left 160ms ease-out,
+                    top 160ms ease-out;
+                pointer-events: none;
+            }
+            .stats {
+                color: var(--dim);
+                font-size: 14px;
+                margin-top: 24px;
+                min-height: 1em;
+            }
+            .stats .up {
+                color: var(--accent);
+            }
+            .stats .down {
+                color: var(--err);
+            }
+            #newtext {
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="wrap">
+            <textarea id="paste" placeholder="paste text..."></textarea>
+            <div class="hint">enter to start · esc for new text</div>
+            <div id="area" style="display: none"></div>
+            <div class="stats" id="stats"></div>
+        </div>
+        <script>
+            const paste = document.getElementById("paste");
+            const area = document.getElementById("area");
+            const stats = document.getElementById("stats");
+            let chunks = [],
+                ci = 0,
+                idx = 0,
+                startTime = null,
+                lastWpm = null,
+                timer = null,
+                locked = false;
+
+            function load() {
+                const t = localStorage.getItem("typot_text");
+                if (t) {
+                    chunks = t
+                        .split(/\n\s*\n/)
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                    ci = +(localStorage.getItem("typot_ci") || 0);
+                    lastWpm = localStorage.getItem("typot_lastwpm")
+                        ? +localStorage.getItem("typot_lastwpm")
+                        : null;
+                    start();
+                }
+            }
+            function start() {
+                paste.style.display = "none";
+                area.style.display = "block";
+                render();
+            }
+            function render() {
+                const c = chunks[ci] || "";
+                let html = "";
+                for (let i = 0; i < c.length; i++)
+                    html += `<span class="char" data-i="${i}">${esc(c[i])}</span>`;
+                area.innerHTML = html + '<span class="caret"></span>';
+                idx = 0;
+                startTime = null;
+                positionCaret();
+            }
+            function esc(s) {
+                if (s === " ") return " ";
+                return s
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;");
+            }
+            function positionCaret() {
+                const caret = area.querySelector(".caret");
+                const spans = area.querySelectorAll(".char");
+                let ref = null;
+                if (idx < spans.length) ref = spans[idx];
+                else if (spans.length) ref = spans[spans.length - 1];
+                if (!ref) {
+                    caret.style.left = "0";
+                    caret.style.top = "0";
+                    return;
+                }
+                caret.style.left = ref.offsetLeft + "px";
+                caret.style.top = ref.offsetTop + "px";
+                if (idx >= spans.length) {
+                    caret.style.left = ref.offsetLeft + ref.offsetWidth + "px";
+                }
+            }
+            function finishChunk() {
+                const elapsed = (Date.now() - startTime) / 1000;
+                const chars = chunks[ci].length;
+                const wpm = Math.round(chars / 5 / (elapsed / 60));
+                let diff = "";
+                if (lastWpm !== null) {
+                    const d = wpm - lastWpm;
+                    diff = ` <span class="${d >= 0 ? "up" : "down"}">${d >= 0 ? "+" : ""}${d}</span>`;
+                }
+                stats.innerHTML = `${wpm} wpm${diff}`;
+                lastWpm = wpm;
+                localStorage.setItem("typot_lastwpm", wpm);
+                ci++;
+                localStorage.setItem("typot_ci", ci);
+                if (ci < chunks.length) {
+                    setTimeout(render, 600);
+                } else {
+                    stats.innerHTML += ` · done`;
+                }
+            }
+            document.addEventListener("keydown", (e) => {
+                if (e.key === "Escape") {
+                    localStorage.clear();
+                    location.reload();
+                    return;
+                }
+                if (area.style.display === "none") return;
+                if (locked) return;
+                if (e.key === "Tab") {
+                    e.preventDefault();
+                    idx = 0;
+                    positionCaret();
+                    return;
+                }
+                if (e.key.length !== 1) return;
+                const c = chunks[ci] || "";
+                if (idx >= c.length) return;
+                if (e.key === c[idx]) {
+                    const sp = area.querySelectorAll(".char")[idx];
+                    if (sp) sp.classList.add("done");
+                    if (startTime === null) startTime = Date.now();
+                    idx++;
+                    positionCaret();
+                    if (idx === c.length) finishChunk();
+                } else {
+                    // error -> highlight letter, then reset chunk
+                    const sp = area.querySelectorAll(".char")[idx];
+                    if (sp) sp.classList.add("err");
+                    locked = true;
+                    setTimeout(() => {
+                        area.querySelectorAll(".char").forEach((s) => {
+                            s.classList.remove("done");
+                            s.classList.remove("err");
+                        });
+                        idx = 0;
+                        startTime = null;
+                        locked = false;
+                        positionCaret();
+                    }, 180);
+                }
+            });
+            paste.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    const v = paste.value.trim();
+                    if (!v) return;
+                    localStorage.setItem("typot_text", v);
+                    chunks = v
+                        .split(/\n\s*\n/)
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                    ci = 0;
+                    localStorage.setItem("typot_ci", 0);
+                    lastWpm = localStorage.getItem("typot_lastwpm")
+                        ? +localStorage.getItem("typot_lastwpm")
+                        : null;
+                    start();
+                }
+            });
+            load();
+        </script>
+    </body>
+</html>
